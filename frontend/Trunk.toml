@@ -1,0 +1,5 @@
+[[hooks]]
+stage = "pre_build"
+command = "npx"
+command_arguments = ["tailwindcss", "-i", "input.css", "-o", "app.css"]
+
