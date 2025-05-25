@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Upload File</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 20px;
+      }
+      #progress {
+        display: none;
+        width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Upload File</h1>
+    <input type="file" id="fileInput" />
+    <button onclick="startTransfer()">Send File</button>
+    <p id="status">Status: Waiting</p>
+    <progress id="progress" value="0" max="100"></progress>
+    <script src="/static/upload.js"></script>
+  </body>
+</html>
