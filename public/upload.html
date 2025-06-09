@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FSend2 - Upload Files</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 600px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 40px;
+            font-size: 1.1em;
+        }
+
+        .drop-zone {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px;
+            margin: 20px 0;
+            background: #f8f9ff;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .drop-zone:hover,
+        .drop-zone.dragover {
+            border-color: #764ba2;
+            background: #f0f0ff;
+            transform: scale(1.02);
+        }
+
+        .drop-zone-text {
+            color: #667eea;
+            font-size: 1.2em;
+            margin-bottom: 10px;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin: 10px;
+            min-width: 120px;
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+
+        .button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .file-list {
+            margin-top: 20px;
+            text-align: left;
+        }
+
+        .file-item {
+            background: #f8f9fa;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .file-name {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .file-size {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+        }
+
+        .progress-bar {
+            background: #e9ecef;
+            height: 10px;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-bottom: 5px;
+        }
+
+        .progress-fill {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100%;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            font-size: 0.8em;
+            color: #666;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 10px;
+            font-weight: bold;
+        }
+
+        .status.connecting {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status.complete {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .remove-file {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            cursor: pointer;
+            float: right;
+        }
+
+        .remove-file:hover {
+            background: #c82333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>FSend2</h1>
+        <p class="subtitle">Send files to the receiver</p>
+        
+        <div id="connection-status" class="status connecting">
+            Connecting to receiver...
+        </div>
+
+        <div id="upload-section" style="display: none;">
+            <div class="drop-zone" onclick="document.getElementById('file-input').click()">
+                <div class="drop-zone-text">
+                    📁 Click here or drag files to upload
+                </div>
+                <small>Multiple files supported</small>
+            </div>
+            
+            <input type="file" id="file-input" class="file-input" multiple>
+            
+            <div id="file-list" class="file-list"></div>
+            
+            <button id="send-button" class="button" onclick="sendFiles()" disabled>
+                Send Files
+            </button>
+        </div>
+    </div>
+
+    <script>
+        let peerConnection;
+        let dataChannel;
+        let sessionId;
+        let selectedFiles = [];
+        let isConnected = false;
+
+        // Extract session ID from URL
+        const pathParts = window.location.pathname.split('/');
+        sessionId = pathParts[pathParts.length - 1];
+
+        // Initialize connection
+        initializeConnection();
+
+        async function initializeConnection() {
+            try {
+                // Get the WebRTC offer from the backend
+                const offerResponse = await fetch(`/api/session/${sessionId}/offer`);
+                if (!offerResponse.ok) {
+                    throw new Error('Session not found');
+                }
+                
+                const offerData = await offerResponse.json();
+                
+                // Create peer connection
+                peerConnection = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' }
+                    ]
+                });
+
+                // Handle data channel from receiver
+                peerConnection.ondatachannel = (event) => {
+                    dataChannel = event.channel;
+                    dataChannel.onopen = () => {
+                        isConnected = true;
+                        updateConnectionStatus('Connected! You can now select files to send.', 'connected');
+                        document.getElementById('upload-section').style.display = 'block';
+                    };
+                };
+
+                // Set remote description (offer from receiver)
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(offerData.offer));
+                
+                // Create answer
+                const answer = await peerConnection.createAnswer();
+                console.log("created answer")
+                await peerConnection.setLocalDescription(answer);
+                
+                // Send answer to backend
+                const answerResponse = await fetch(`/api/session/${sessionId}/answer`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        answer: answer
+                    })
+                });
+
+                if (!answerResponse.ok) {
+                    throw new Error('Failed to send answer');
+                }
+
+            } catch (error) {
+                console.error('Connection error:', error);
+                updateConnectionStatus('Failed to connect to receiver. Please try again.', 'error');
+            }
+        }
+
+        function updateConnectionStatus(message, type) {
+            const statusElement = document.getElementById('connection-status');
+            statusElement.textContent = message;
+            statusElement.className = `status ${type}`;
+        }
+
+        // File selection and drag & drop
+        const dropZone = document.querySelector('.drop-zone');
+        const fileInput = document.getElementById('file-input');
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+        });
+
+        function handleFiles(files) {
+            for (let file of files) {
+                selectedFiles.push({
+                    file: file,
+                    id: Date.now() + Math.random(),
+                    progress: 0,
+                    status: 'ready'
+                });
+            }
+            updateFileList();
+            updateSendButton();
+        }
+
+        function updateFileList() {
+            const fileList = document.getElementById('file-list');
+            fileList.innerHTML = '';
+
+            selectedFiles.forEach((fileInfo, index) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.innerHTML = `
+                    <button class="remove-file" onclick="removeFile(${index})">×</button>
+                    <div class="file-name">${fileInfo.file.name}</div>
+                    <div class="file-size">${formatFileSize(fileInfo.file.size)}</div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-${fileInfo.id}" style="width: ${fileInfo.progress}%"></div>
+                    </div>
+                    <div class="progress-text" id="status-${fileInfo.id}">${fileInfo.status}</div>
+                `;
+                fileList.appendChild(fileItem);
+            });
+        }
+
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFileList();
+            updateSendButton();
+        }
+
+        function updateSendButton() {
+            const sendButton = document.getElementById('send-button');
+            sendButton.disabled = !isConnected || selectedFiles.length === 0;
+        }
+
+        async function sendFiles() {
+            if (!isConnected || selectedFiles.length === 0) return;
+
+            const sendButton = document.getElementById('send-button');
+            sendButton.disabled = true;
+            sendButton.textContent = 'Sending...';
+
+            for (let fileInfo of selectedFiles) {
+                await sendFile(fileInfo);
+            }
+
+            updateConnectionStatus('All files sent successfully!', 'complete');
+            sendButton.textContent = 'Send More Files';
+            selectedFiles = [];
+            updateFileList();
+            updateSendButton();
+        }
+
+        async function sendFile(fileInfo) {
+            const file = fileInfo.file;
+            const chunkSize = 16384; // 16KB chunks
+            
+            // Send file start message
+            dataChannel.send(JSON.stringify({
+                type: 'file-start',
+                name: file.name,
+                size: file.size
+            }));
+
+            // Update status
+            document.getElementById(`status-${fileInfo.id}`).textContent = 'Sending...';
+
+            // Send file in chunks
+            let offset = 0;
+            while (offset < file.size) {
+                const chunk = file.slice(offset, offset + chunkSize);
+                const arrayBuffer = await chunk.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+                
+                // Convert to base64 for JSON transmission
+                const base64 = btoa(String.fromCharCode.apply(null, uint8Array));
+                
+                dataChannel.send(JSON.stringify({
+                    type: 'file-chunk',
+                    data: base64
+                }));
+
+                offset += chunkSize;
+                
+                // Update progress
+                const progress = Math.min((offset / file.size) * 100, 100);
+                fileInfo.progress = progress;
+                document.getElementById(`progress-${fileInfo.id}`).style.width = `${progress}%`;
+                document.getElementById(`status-${fileInfo.id}`).textContent = 
+                    `${Math.round(progress)}% (${formatFileSize(offset)} / ${formatFileSize(file.size)})`;
+
+                // Small delay to prevent overwhelming the connection
+                await new Promise(resolve => setTimeout(resolve, 1));
+            }
+
+            // Send file end message
+            dataChannel.send(JSON.stringify({
+                type: 'file-end'
+            }));
+
+            document.getElementById(`status-${fileInfo.id}`).textContent = 'Complete!';
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+    </script>
+</body>
+</html>
+

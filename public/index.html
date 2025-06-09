@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FSend2 - File Transfer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 500px;
+            width: 90%;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 40px;
+            font-size: 1.1em;
+        }
+
+        .button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 1.2em;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin: 10px;
+            min-width: 150px;
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+
+        .button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .session-info {
+            display: none;
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+
+        .qr-code {
+            margin: 20px 0;
+        }
+
+        .qr-code img {
+            max-width: 200px;
+            border-radius: 10px;
+        }
+
+        .upload-link {
+            background: #e9ecef;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            word-break: break-all;
+            font-family: monospace;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+
+        .status.waiting {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .file-list {
+            margin-top: 20px;
+            text-align: left;
+        }
+
+        .file-item {
+            background: white;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+            border-left: 4px solid #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>FSend2</h1>
+        <p class="subtitle">Secure peer-to-peer file transfer</p>
+        
+        <div id="main-screen">
+            <button class="button" onclick="startReceiving()">Receive Files</button>
+        </div>
+
+        <div id="session-info" class="session-info">
+            <h3>Ready to Receive Files</h3>
+            <div class="qr-code">
+                <img id="qr-image" src="" alt="QR Code">
+            </div>
+            <p>Scan the QR code or share this link:</p>
+            <div class="upload-link" id="upload-link"></div>
+            <div id="status" class="status waiting">Waiting for sender to connect...</div>
+            <div id="file-list" class="file-list"></div>
+        </div>
+    </div>
+
+    <script>
+        let peerConnection;
+        let dataChannel;
+        let sessionId;
+        const receivedFiles = [];
+
+        async function startReceiving() {
+            try {
+                // Create WebRTC peer connection
+                peerConnection = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' }
+                    ]
+                });
+
+                // Create data channel for file transfer
+                dataChannel = peerConnection.createDataChannel('fileTransfer', {
+                    ordered: true
+                });
+
+                dataChannel.onopen = () => {
+                    updateStatus('Connected! Ready to receive files.', 'connected');
+                };
+
+                dataChannel.onmessage = handleDataChannelMessage;
+
+                // Create offer
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                // Send offer to backend
+                const response = await fetch('/api/create-session', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        offer: offer
+                    })
+                });
+
+                const data = await response.json();
+                sessionId = data.session_id;
+
+                // Display QR code and link
+                document.getElementById('qr-image').src = data.qr_code;
+                document.getElementById('upload-link').textContent = data.upload_url;
+                
+                // Hide main screen and show session info
+                document.getElementById('main-screen').style.display = 'none';
+                document.getElementById('session-info').style.display = 'block';
+
+                // Start polling for answer
+                pollForAnswer();
+
+            } catch (error) {
+                console.error('Error starting receive session:', error);
+                updateStatus('Error starting session. Please try again.', 'error');
+            }
+        }
+
+        async function pollForAnswer() {
+            try {
+                const response = await fetch(`/api/session/${sessionId}/answer`);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                    updateStatus('Sender connected! Waiting for files...', 'connected');
+                } else if (response.status === 404) {
+                    // Answer not ready yet, poll again
+                    setTimeout(pollForAnswer, 1000);
+                } else {
+                    throw new Error('Failed to get answer');
+                }
+            } catch (error) {
+                console.error('Error polling for answer:', error);
+                setTimeout(pollForAnswer, 2000);
+            }
+        }
+
+        function handleDataChannelMessage(event) {
+            try {
+                const message = JSON.parse(event.data);
+                
+                if (message.type === 'file-start') {
+                    // New file transfer starting
+                    const fileInfo = {
+                        name: message.name,
+                        size: message.size,
+                        chunks: [],
+                        receivedSize: 0
+                    };
+                    receivedFiles.push(fileInfo);
+                    addFileToList(fileInfo);
+                    
+                } else if (message.type === 'file-chunk') {
+                    // File chunk received - decode base64 data
+                    const fileInfo = receivedFiles[receivedFiles.length - 1];
+                    const binaryString = atob(message.data);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    fileInfo.chunks.push(bytes);
+                    fileInfo.receivedSize += bytes.length;
+                    updateFileProgress(fileInfo);
+                    
+                } else if (message.type === 'file-end') {
+                    // File transfer complete
+                    const fileInfo = receivedFiles[receivedFiles.length - 1];
+                    completeFileTransfer(fileInfo);
+                }
+            } catch (error) {
+                console.error('Error handling message:', error);
+            }
+        }
+
+        function addFileToList(fileInfo) {
+            const fileList = document.getElementById('file-list');
+            const fileItem = document.createElement('div');
+            fileItem.className = 'file-item';
+            fileItem.id = `file-${receivedFiles.length - 1}`;
+            fileItem.innerHTML = `
+                <strong>${fileInfo.name}</strong><br>
+                <small>Size: ${formatFileSize(fileInfo.size)}</small><br>
+                <div style="margin-top: 5px;">
+                    <div style="background: #e9ecef; height: 10px; border-radius: 5px;">
+                        <div id="progress-${receivedFiles.length - 1}" style="background: #667eea; height: 100%; border-radius: 5px; width: 0%; transition: width 0.3s;"></div>
+                    </div>
+                    <small id="status-${receivedFiles.length - 1}">Starting...</small>
+                </div>
+            `;
+            fileList.appendChild(fileItem);
+        }
+
+        function updateFileProgress(fileInfo) {
+            const index = receivedFiles.indexOf(fileInfo);
+            const progress = (fileInfo.receivedSize / fileInfo.size) * 100;
+            document.getElementById(`progress-${index}`).style.width = `${progress}%`;
+            document.getElementById(`status-${index}`).textContent = 
+                `${formatFileSize(fileInfo.receivedSize)} / ${formatFileSize(fileInfo.size)} (${Math.round(progress)}%)`;
+        }
+
+        function completeFileTransfer(fileInfo) {
+            const index = receivedFiles.indexOf(fileInfo);
+            
+            // Combine chunks and create blob
+            const blob = new Blob(fileInfo.chunks);
+            const url = URL.createObjectURL(blob);
+            
+            // Create download link
+            const downloadLink = document.createElement('a');
+            downloadLink.href = url;
+            downloadLink.download = fileInfo.name;
+            downloadLink.textContent = 'Download';
+            downloadLink.style.marginLeft = '10px';
+            downloadLink.style.color = '#667eea';
+            
+            document.getElementById(`status-${index}`).innerHTML = 
+                `Complete! ${downloadLink.outerHTML}`;
+        }
+
+        function updateStatus(message, type) {
+            const statusElement = document.getElementById('status');
+            statusElement.textContent = message;
+            statusElement.className = `status ${type}`;
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+    </script>
+</body>
+</html>
+
